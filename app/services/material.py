@@ -227,6 +227,41 @@ def search_videos_animetosho(
             timeout=(30, 60),
         )
         html_content = r.text
+        
+        # Try to use BeautifulSoup for robust parsing of entries
+        try:
+            from bs4 import BeautifulSoup
+            soup = BeautifulSoup(html_content, 'html.parser')
+            entries = soup.find_all('div', class_=lambda c: c and 'home_list_entry' in c)
+            video_items = []
+            seen_urls = set()
+            for entry in entries:
+                # Find direct torrent link first
+                torrent_a = entry.find('a', href=lambda h: h and 'torrent' in h and not h.startswith('magnet:'))
+                download_url = None
+                if torrent_a:
+                    download_url = torrent_a['href']
+                    if download_url.startswith('/'):
+                        download_url = "https://animetosho.org" + download_url
+                else:
+                    # Fallback to magnet link
+                    magnet_a = entry.find('a', href=lambda h: h and h.startswith('magnet:'))
+                    if magnet_a:
+                        download_url = html.unescape(magnet_a['href'])
+                
+                if download_url and download_url not in seen_urls:
+                    seen_urls.add(download_url)
+                    item = MaterialInfo()
+                    item.provider = "animetosho"
+                    item.url = download_url
+                    item.duration = 1200
+                    video_items.append(item)
+            if video_items:
+                return video_items
+        except Exception as parse_err:
+            logger.warning(f"Failed parsing AnimeTosho with BeautifulSoup, falling back to regex: {str(parse_err)}")
+
+        # Regex fallback
         magnet_links = re.findall(r'href="(magnet:\?[^"]+)"', html_content)
         if not magnet_links:
             magnet_links = re.findall(r'magnet:\?[^"\'\s>]+', html_content)
@@ -475,7 +510,7 @@ def save_video(video_url: str, save_dir: str = "") -> str:
     if not os.path.exists(save_dir):
         os.makedirs(save_dir)
 
-    if video_url.startswith("magnet:"):
+    if video_url.startswith("magnet:") or ".torrent" in video_url:
         url_hash = utils.md5(video_url)
     else:
         url_without_query = video_url.split("?")[0]
@@ -534,7 +569,7 @@ def save_video(video_url: str, save_dir: str = "") -> str:
             return ""
 
     # AnimeTosho download logic
-    if video_url.startswith("magnet:"):
+    if video_url.startswith("magnet:") or ".torrent" in video_url:
         torrent_temp_dir = os.path.join(save_dir, f"{video_id}_temp")
         if os.path.exists(torrent_temp_dir):
             try:
@@ -619,7 +654,7 @@ def save_video(video_url: str, save_dir: str = "") -> str:
         if not success:
             return ""
 
-    if "tiktok.com" not in video_url and not video_url.startswith("magnet:"):
+    if "tiktok.com" not in video_url and not video_url.startswith("magnet:") and ".torrent" not in video_url:
         headers = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36"
         }
@@ -710,8 +745,9 @@ def download_videos(
 
     concat_mode_value = getattr(video_concat_mode, "value", video_concat_mode)
     if concat_mode_value == VideoConcatMode.random.value:
-        random.shuffle(hook_items)
-        random.shuffle(body_items)
+        if source != "animetosho":
+            random.shuffle(hook_items)
+            random.shuffle(body_items)
         valid_video_items = hook_items + body_items
 
     total_duration = 0.0
