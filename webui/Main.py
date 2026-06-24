@@ -817,6 +817,7 @@ with middle_panel:
             (tr("Bilibili"), "bilibili"),
             (tr("Xiaohongshu"), "xiaohongshu"),
             (tr("AnimeTosho"), "animetosho"),
+            (tr("YouTube"), "youtube"),
         ]
 
         saved_video_source_name = config.app.get("video_source", "pexels")
@@ -1468,7 +1469,7 @@ if start_button:
         scroll_to_bottom()
         st.stop()
 
-    if params.video_source not in ["pexels", "pixabay", "coverr", "local", "douyin", "animetosho"]:
+    if params.video_source not in ["pexels", "pixabay", "coverr", "local", "douyin", "animetosho", "youtube"]:
         st.error(tr("Please Select a Valid Video Source"))
         scroll_to_bottom()
         st.stop()

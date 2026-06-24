@@ -211,6 +211,22 @@ def search_videos_tiktok(
         return []
 
 
+def search_videos_youtube(
+    search_term: str,
+    minimum_duration: int,
+    video_aspect: VideoAspect = VideoAspect.portrait,
+) -> List[MaterialInfo]:
+    video_items = []
+    suffixes = ["clip", "scene", "edit", "fight", "moment"]
+    for suffix in suffixes:
+        item = MaterialInfo()
+        item.provider = "youtube"
+        item.url = f"ytsearch1:{search_term} {suffix}"
+        item.duration = 300
+        video_items.append(item)
+    return video_items
+
+
 def search_videos_animetosho(
     search_term: str,
     minimum_duration: int,
@@ -654,7 +670,52 @@ def save_video(video_url: str, save_dir: str = "") -> str:
         if not success:
             return ""
 
-    if "tiktok.com" not in video_url and not video_url.startswith("magnet:") and ".torrent" not in video_url:
+    # YouTube download logic
+    if video_url.startswith("ytsearch:") or "youtube.com" in video_url or "youtu.be" in video_url:
+        video_id_path_no_ext = os.path.join(save_dir, video_id)
+        cmd = [
+            "yt-dlp",
+            "--impersonate", "chrome",
+            "--sleep-interval", "3",
+            "--merge-output-format", "mp4",
+            "-o", f"{video_id_path_no_ext}.%(ext)s",
+            video_url
+        ]
+        logger.info(f"Running yt-dlp to download YouTube video: {' '.join(cmd)}")
+        try:
+            subprocess.run(cmd, check=True, timeout=120)
+            
+            downloaded_file = None
+            for ext in [".mp4", ".mkv", ".webm", ".avi", ".flv"]:
+                candidate = f"{video_id_path_no_ext}{ext}"
+                if os.path.exists(candidate) and os.path.getsize(candidate) > 0:
+                    downloaded_file = candidate
+                    break
+                    
+            if downloaded_file:
+                if downloaded_file.lower().endswith(".mp4"):
+                    pass
+                else:
+                    ffmpeg_cmd = ["ffmpeg", "-y", "-i", downloaded_file, "-c", "copy", video_path]
+                    logger.info(f"Converting YouTube video to MP4: {' '.join(ffmpeg_cmd)}")
+                    try:
+                        subprocess.run(ffmpeg_cmd, check=True, timeout=180)
+                        try:
+                            os.remove(downloaded_file)
+                        except Exception:
+                            pass
+                    except Exception as e:
+                        logger.error(f"Failed to convert YouTube video to MP4: {str(e)}")
+                        return ""
+                
+                if os.path.exists(video_path) and os.path.getsize(video_path) > 0:
+                    logger.info(f"YouTube video successfully saved: {video_path}")
+                    return video_path
+        except Exception as e:
+            logger.error(f"Failed to download YouTube video: {str(e)}")
+            return ""
+
+    if "tiktok.com" not in video_url and not video_url.startswith("magnet:") and ".torrent" not in video_url and not video_url.startswith("ytsearch:") and "youtube.com" not in video_url and "youtu.be" not in video_url:
         headers = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36"
         }
@@ -695,6 +756,8 @@ def download_videos(
         search_videos = search_videos_tiktok
     elif source == "animetosho":
         search_videos = search_videos_animetosho
+    elif source == "youtube":
+        search_videos = search_videos_youtube
 
     material_directory = config.app.get("material_directory", "").strip()
     if material_directory == "task":
