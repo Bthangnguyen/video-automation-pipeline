@@ -816,6 +816,7 @@ with middle_panel:
             (tr("TikTok"), "douyin"),
             (tr("Bilibili"), "bilibili"),
             (tr("Xiaohongshu"), "xiaohongshu"),
+            (tr("AnimeTosho"), "animetosho"),
         ]
 
         saved_video_source_name = config.app.get("video_source", "pexels")
@@ -831,6 +832,24 @@ with middle_panel:
         )
         params.video_source = video_sources[selected_index][1]
         config.app["video_source"] = params.video_source
+
+        if params.video_source == "douyin":
+            themes_dict = config.app.get("tiktok", {}).get("themes", {"default": {"hooks": ["@zachking"], "bodies": ["@zachking"]}})
+            theme_keys = list(themes_dict.keys())
+            saved_theme = config.app.get("tiktok", {}).get("selected_theme", "default")
+            if saved_theme not in theme_keys:
+                theme_keys.append(saved_theme)
+            
+            selected_theme_index = theme_keys.index(saved_theme) if saved_theme in theme_keys else 0
+            selected_theme = st.selectbox(
+                tr("TikTok Theme Formula"),
+                options=theme_keys,
+                index=selected_theme_index,
+                help=tr("Select a TikTok themed formula consisting of custom hook and body accounts.")
+            )
+            if "tiktok" not in config.app:
+                config.app["tiktok"] = {}
+            config.app["tiktok"]["selected_theme"] = selected_theme
 
         if params.video_source == "local":
             # Streamlit 的文件类型校验对扩展名大小写敏感，这里同时放行大小写两种形式。
@@ -1449,7 +1468,7 @@ if start_button:
         scroll_to_bottom()
         st.stop()
 
-    if params.video_source not in ["pexels", "pixabay", "coverr", "local"]:
+    if params.video_source not in ["pexels", "pixabay", "coverr", "local", "douyin", "animetosho"]:
         st.error(tr("Please Select a Valid Video Source"))
         scroll_to_bottom()
         st.stop()

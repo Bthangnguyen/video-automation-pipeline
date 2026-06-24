@@ -1,6 +1,11 @@
 import os
 import random
 import threading
+import subprocess
+import json
+import re
+import html
+import shutil
 from typing import List
 from urllib.parse import urlencode
 
@@ -50,6 +55,199 @@ def get_api_key(cfg_key: str):
     with _api_key_lock:
         _api_key_counter += 1
         return api_keys[_api_key_counter % len(api_keys)]
+
+
+def _find_tiktok_cookies() -> str:
+    if os.path.exists("tiktok.txt"):
+        return os.path.abspath("tiktok.txt")
+    parent_cookies = os.path.join(os.path.dirname(os.getcwd()), "tiktok.txt")
+    if os.path.exists(parent_cookies):
+        return os.path.abspath(parent_cookies)
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    project_root = os.path.dirname(os.path.dirname(script_dir))
+    parent_of_root = os.path.dirname(project_root)
+    for path in [
+        os.path.join(project_root, "tiktok.txt"),
+        os.path.join(parent_of_root, "tiktok.txt"),
+    ]:
+        if os.path.exists(path):
+            return os.path.abspath(path)
+    return "tiktok.txt"
+
+
+def _find_aria2c() -> str:
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    project_root = os.path.dirname(os.path.dirname(script_dir))
+    venv_aria2c = os.path.join(project_root, ".venv", "Scripts", "aria2c.exe")
+    if os.path.exists(venv_aria2c):
+        return venv_aria2c
+    venv_aria2c_unix = os.path.join(project_root, ".venv", "bin", "aria2c")
+    if os.path.exists(venv_aria2c_unix):
+        return venv_aria2c_unix
+    sys_aria2c = shutil.which("aria2c")
+    if sys_aria2c:
+        return sys_aria2c
+    return "aria2c.exe"
+
+
+def search_videos_tiktok(
+    search_term: str,
+    minimum_duration: int,
+    video_aspect: VideoAspect = VideoAspect.portrait,
+    is_hook: bool = False,
+) -> List[MaterialInfo]:
+    is_profile = "@" in search_term and "video/" not in search_term
+    is_direct_video = search_term.startswith("http") and "tiktok.com" in search_term and not is_profile
+
+    if is_direct_video:
+        item = MaterialInfo()
+        item.provider = "douyin"
+        item.url = search_term
+        item.duration = 60
+        return [item]
+
+    profile_url = ""
+    if is_profile:
+        profile_url = search_term
+        if not profile_url.startswith("http"):
+            if not profile_url.startswith("@"):
+                profile_url = "@" + profile_url
+            profile_url = f"https://www.tiktok.com/{profile_url}"
+    else:
+        # Load themes configuration
+        tiktok_config = config.app.get("tiktok", {})
+        selected_theme = tiktok_config.get("selected_theme", "default")
+        themes = tiktok_config.get("themes", {})
+        theme_data = themes.get(selected_theme, {})
+        
+        if is_hook:
+            accounts = theme_data.get("hooks") or tiktok_config.get("default_hooks") or config.app.get("tiktok_accounts") or ["@zachking"]
+            logger.info(f"TikTok sourcing: Using Hook channels from theme '{selected_theme}'")
+        else:
+            accounts = theme_data.get("bodies") or tiktok_config.get("default_bodies") or config.app.get("tiktok_accounts") or ["@zachking"]
+            logger.info(f"TikTok sourcing: Using Body channels from theme '{selected_theme}'")
+            
+        if not isinstance(accounts, list) or not accounts:
+            accounts = ["@zachking"]
+            
+        account = random.choice(accounts)
+        if not account.startswith("@"):
+            account = "@" + account
+        profile_url = f"https://www.tiktok.com/{account}"
+
+    # Try searching with cookies first (if they exist)
+    cookies_path = _find_tiktok_cookies()
+    cmd_with_cookies = [
+        "yt-dlp",
+        "--cookies", cookies_path,
+        "--flat-playlist",
+        "--dump-single-json",
+        profile_url,
+        "--playlist-end", "5"
+    ]
+    
+    cmd_no_cookies = [
+        "yt-dlp",
+        "--impersonate", "chrome",
+        "--flat-playlist",
+        "--dump-single-json",
+        profile_url,
+        "--playlist-end", "5"
+    ]
+
+    result_json = None
+    
+    # Try with cookies
+    if os.path.exists(cookies_path):
+        logger.info(f"Running yt-dlp to search TikTok videos with cookies: {' '.join(cmd_with_cookies)}")
+        try:
+            res = subprocess.run(cmd_with_cookies, capture_output=True, text=True, check=True, encoding="utf-8")
+            result_json = res.stdout
+        except Exception as e:
+            logger.warning(f"Failed to search TikTok videos using cookies, falling back to no-cookies: {str(e)}")
+
+    # Fallback to no cookies (with Chrome impersonation)
+    if not result_json:
+        logger.info(f"Running yt-dlp to search TikTok videos without cookies: {' '.join(cmd_no_cookies)}")
+        try:
+            res = subprocess.run(cmd_no_cookies, capture_output=True, text=True, check=True, encoding="utf-8")
+            result_json = res.stdout
+        except Exception as e:
+            logger.error(f"Failed to search TikTok videos without cookies: {str(e)}")
+            return []
+
+    try:
+        data = json.loads(result_json)
+        video_items = []
+        entries = data.get("entries", [])
+        for entry in entries:
+            if not entry:
+                continue
+            entry_url = entry.get("url") or entry.get("webpage_url")
+            if not entry_url and entry.get("id"):
+                entry_url = f"https://www.tiktok.com/@placeholder/video/{entry['id']}"
+            if not entry_url:
+                continue
+            
+            duration = entry.get("duration")
+            if duration is None:
+                duration = 60
+            try:
+                duration = int(float(duration))
+            except (TypeError, ValueError):
+                duration = 60
+
+            if duration < minimum_duration:
+                continue
+
+            item = MaterialInfo()
+            item.provider = "douyin"
+            item.url = entry_url
+            item.duration = duration
+            video_items.append(item)
+        return video_items
+    except Exception as e:
+        logger.error(f"Failed to parse TikTok videos JSON: {str(e)}")
+        return []
+
+
+def search_videos_animetosho(
+    search_term: str,
+    minimum_duration: int,
+    video_aspect: VideoAspect = VideoAspect.portrait,
+) -> List[MaterialInfo]:
+    params = {"q": search_term}
+    query_url = f"https://animetosho.org/search?{urlencode(params)}"
+    logger.info(f"searching AnimeTosho videos: {query_url}, with proxies: {config.proxy}")
+    try:
+        r = requests.get(
+            query_url,
+            proxies=config.proxy,
+            verify=_get_tls_verify(),
+            timeout=(30, 60),
+        )
+        html_content = r.text
+        magnet_links = re.findall(r'href="(magnet:\?[^"]+)"', html_content)
+        if not magnet_links:
+            magnet_links = re.findall(r'magnet:\?[^"\'\s>]+', html_content)
+        
+        video_items = []
+        seen_magnets = set()
+        for magnet in magnet_links:
+            unescaped_magnet = html.unescape(magnet)
+            if unescaped_magnet in seen_magnets:
+                continue
+            seen_magnets.add(unescaped_magnet)
+            
+            item = MaterialInfo()
+            item.provider = "animetosho"
+            item.url = unescaped_magnet
+            item.duration = 1200
+            video_items.append(item)
+        return video_items
+    except Exception as e:
+        logger.error(f"search AnimeTosho videos failed: {str(e)}")
+    return []
 
 
 def search_videos_pexels(
@@ -241,6 +439,35 @@ def search_videos_coverr(
     return []
 
 
+def _is_valid_video_file(video_path: str) -> bool:
+    if not os.path.exists(video_path) or os.path.getsize(video_path) <= 0:
+        return False
+    clip = None
+    try:
+        clip = VideoFileClip(video_path)
+        duration = clip.duration
+        fps = clip.fps
+        if duration > 0 and fps > 0:
+            return True
+    except Exception as e:
+        logger.warning(f"invalid video file: {video_path} => {str(e)}")
+        try:
+            os.remove(video_path)
+        except Exception as remove_error:
+            logger.warning(
+                f"failed to remove invalid video file: {video_path}, error: {str(remove_error)}"
+            )
+    finally:
+        if clip is not None:
+            try:
+                clip.close()
+            except Exception as close_error:
+                logger.warning(
+                    f"failed to close video clip: {video_path}, error: {str(close_error)}"
+                )
+    return False
+
+
 def save_video(video_url: str, save_dir: str = "") -> str:
     if not save_dir:
         save_dir = utils.storage_dir("cache_videos")
@@ -255,49 +482,155 @@ def save_video(video_url: str, save_dir: str = "") -> str:
 
     # if video already exists, return the path
     if os.path.exists(video_path) and os.path.getsize(video_path) > 0:
-        logger.info(f"video already exists: {video_path}")
-        return video_path
+        if _is_valid_video_file(video_path):
+            logger.info(f"video already exists: {video_path}")
+            return video_path
+        else:
+            logger.info(f"cached video is invalid or corrupted, removed: {video_path}")
 
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36"
-    }
-
-    # if video does not exist, download it
-    with open(video_path, "wb") as f:
-        f.write(
-            requests.get(
-                video_url,
-                headers=headers,
-                proxies=config.proxy,
-                verify=_get_tls_verify(),
-                timeout=(60, 240),
-            ).content
-        )
-
-    if os.path.exists(video_path) and os.path.getsize(video_path) > 0:
-        clip = None
-        try:
-            clip = VideoFileClip(video_path)
-            duration = clip.duration
-            fps = clip.fps
-            if duration > 0 and fps > 0:
-                return video_path
-        except Exception as e:
-            logger.warning(f"invalid video file: {video_path} => {str(e)}")
+    # TikTok download logic
+    if "tiktok.com" in video_url:
+        cookies_path = _find_tiktok_cookies()
+        cmd_with_cookies = [
+            "yt-dlp",
+            "--cookies", cookies_path,
+            "--sleep-interval", "5",
+            "-o", video_path,
+            video_url
+        ]
+        cmd_no_cookies = [
+            "yt-dlp",
+            "--impersonate", "chrome",
+            "--sleep-interval", "5",
+            "-o", video_path,
+            video_url
+        ]
+        
+        success = False
+        if os.path.exists(cookies_path):
+            logger.info(f"Running yt-dlp to download TikTok video with cookies: {' '.join(cmd_with_cookies)}")
             try:
-                os.remove(video_path)
-            except Exception as remove_error:
-                logger.warning(
-                    f"failed to remove invalid video file: {video_path}, error: {str(remove_error)}"
-                )
-        finally:
-            if clip is not None:
+                subprocess.run(cmd_with_cookies, check=True, timeout=300)
+                if os.path.exists(video_path) and os.path.getsize(video_path) > 0:
+                    logger.info(f"TikTok video saved: {video_path}")
+                    success = True
+            except Exception as e:
+                logger.warning(f"Failed to download TikTok video using cookies, falling back to no-cookies: {str(e)}")
+
+        if not success:
+            logger.info(f"Running yt-dlp to download TikTok video without cookies: {' '.join(cmd_no_cookies)}")
+            try:
+                subprocess.run(cmd_no_cookies, check=True, timeout=300)
+                if os.path.exists(video_path) and os.path.getsize(video_path) > 0:
+                    logger.info(f"TikTok video saved without cookies: {video_path}")
+                    success = True
+            except Exception as e:
+                logger.error(f"Failed to download TikTok video without cookies: {str(e)}")
+
+        if not success:
+            return ""
+
+    # AnimeTosho download logic
+    if video_url.startswith("magnet:"):
+        aria2c_bin = _find_aria2c()
+        cmd = [
+            aria2c_bin,
+            f"--dir={save_dir}",
+            "--seed-time=0",
+            "--bt-stop-timeout=90",
+            "--allow-overwrite=true",
+            video_url
+        ]
+        logger.info(f"Running aria2c to download magnet link: {' '.join(cmd)}")
+        try:
+            subprocess.run(cmd, check=True, timeout=120)
+        except subprocess.TimeoutExpired:
+            logger.warning("aria2c download timed out (120s), scanning for completed files.")
+        except Exception as e:
+            logger.error(f"Failed to run aria2c: {str(e)}")
+
+        # Scan for largest video file
+        video_extensions = ('.mp4', '.mkv', '.avi', '.mov', '.flv', '.wmv', '.webm', '.mpeg')
+        largest_file = None
+        max_size = -1
+        for root, dirs, files in os.walk(save_dir):
+            for file in files:
+                if file.lower().endswith(video_extensions):
+                    full_path = os.path.join(root, file)
+                    try:
+                        size = os.path.getsize(full_path)
+                        if size > max_size:
+                            max_size = size
+                            largest_file = full_path
+                    except Exception:
+                        continue
+
+        if largest_file:
+            dest_mp4_path = os.path.join(save_dir, f"vid-{url_hash}.mp4")
+            parent_of_largest = os.path.dirname(largest_file)
+
+            if largest_file.lower().endswith(".mkv"):
+                # Convert MKV to MP4 using ffmpeg
+                ffmpeg_cmd = ["ffmpeg", "-y", "-i", largest_file, "-c", "copy", dest_mp4_path]
+                logger.info(f"Converting MKV to MP4: {' '.join(ffmpeg_cmd)}")
                 try:
-                    clip.close()
-                except Exception as close_error:
-                    logger.warning(
-                        f"failed to close video clip: {video_path}, error: {str(close_error)}"
-                    )
+                    subprocess.run(ffmpeg_cmd, check=True, timeout=180)
+                    try:
+                        os.remove(largest_file)
+                    except Exception as e:
+                        logger.warning(f"Failed to remove original MKV file {largest_file}: {str(e)}")
+                except Exception as e:
+                    logger.error(f"Failed to convert MKV to MP4: {str(e)}")
+                    return ""
+            else:
+                if os.path.abspath(largest_file) != os.path.abspath(dest_mp4_path):
+                    if os.path.exists(dest_mp4_path):
+                        try:
+                            os.remove(dest_mp4_path)
+                        except Exception:
+                            pass
+                    try:
+                        os.rename(largest_file, dest_mp4_path)
+                    except Exception as e:
+                        logger.error(f"Failed to rename {largest_file} to {dest_mp4_path}: {str(e)}")
+                        try:
+                            shutil.copy2(largest_file, dest_mp4_path)
+                            os.remove(largest_file)
+                        except Exception as e2:
+                            logger.error(f"Fallback copy/delete failed: {str(e2)}")
+                            return ""
+
+            # Cleanup parent of largest file if it's a subdirectory
+            if os.path.abspath(parent_of_largest) != os.path.abspath(save_dir):
+                try:
+                    shutil.rmtree(parent_of_largest)
+                except Exception as rmtree_err:
+                    logger.warning(f"Failed to remove torrent directory {parent_of_largest}: {str(rmtree_err)}")
+
+            if os.path.exists(dest_mp4_path) and os.path.getsize(dest_mp4_path) > 0:
+                logger.info(f"AnimeTosho video saved: {dest_mp4_path}")
+        if not largest_file:
+            return ""
+
+    if "tiktok.com" not in video_url and not video_url.startswith("magnet:"):
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36"
+        }
+
+        # if video does not exist, download it
+        with open(video_path, "wb") as f:
+            f.write(
+                requests.get(
+                    video_url,
+                    headers=headers,
+                    proxies=config.proxy,
+                    verify=_get_tls_verify(),
+                    timeout=(60, 240),
+                ).content
+            )
+
+    if _is_valid_video_file(video_path):
+        return video_path
     return ""
 
 
@@ -316,6 +649,10 @@ def download_videos(
         search_videos = search_videos_pixabay
     elif source == "coverr":
         search_videos = search_videos_coverr
+    elif source == "douyin":
+        search_videos = search_videos_tiktok
+    elif source == "animetosho":
+        search_videos = search_videos_animetosho
 
     material_directory = config.app.get("material_directory", "").strip()
     if material_directory == "task":
@@ -337,12 +674,15 @@ def download_videos(
     valid_video_items = []
     valid_video_urls = []
     found_duration = 0.0
-    for search_term in search_terms:
-        video_items = search_videos(
-            search_term=search_term,
-            minimum_duration=max_clip_duration,
-            video_aspect=video_aspect,
-        )
+    for i, search_term in enumerate(search_terms):
+        kwargs = {
+            "search_term": search_term,
+            "minimum_duration": max_clip_duration,
+            "video_aspect": video_aspect,
+        }
+        if source == "douyin":
+            kwargs["is_hook"] = (i == 0)
+        video_items = search_videos(**kwargs)
         logger.info(f"found {len(video_items)} videos for '{search_term}'")
 
         for item in video_items:
@@ -406,12 +746,15 @@ def _download_videos_by_script_order(
     valid_video_urls = set()
     found_duration = 0.0
 
-    for search_term in search_terms:
-        video_items = search_videos(
-            search_term=search_term,
-            minimum_duration=max_clip_duration,
-            video_aspect=video_aspect,
-        )
+    for i, search_term in enumerate(search_terms):
+        kwargs = {
+            "search_term": search_term,
+            "minimum_duration": max_clip_duration,
+            "video_aspect": video_aspect,
+        }
+        if search_videos == search_videos_tiktok:
+            kwargs["is_hook"] = (i == 0)
+        video_items = search_videos(**kwargs)
         logger.info(f"found {len(video_items)} videos for '{search_term}'")
 
         term_items = []
