@@ -475,8 +475,11 @@ def save_video(video_url: str, save_dir: str = "") -> str:
     if not os.path.exists(save_dir):
         os.makedirs(save_dir)
 
-    url_without_query = video_url.split("?")[0]
-    url_hash = utils.md5(url_without_query)
+    if video_url.startswith("magnet:"):
+        url_hash = utils.md5(video_url)
+    else:
+        url_without_query = video_url.split("?")[0]
+        url_hash = utils.md5(url_without_query)
     video_id = f"vid-{url_hash}"
     video_path = f"{save_dir}/{video_id}.mp4"
 
@@ -532,10 +535,18 @@ def save_video(video_url: str, save_dir: str = "") -> str:
 
     # AnimeTosho download logic
     if video_url.startswith("magnet:"):
+        torrent_temp_dir = os.path.join(save_dir, f"{video_id}_temp")
+        if os.path.exists(torrent_temp_dir):
+            try:
+                shutil.rmtree(torrent_temp_dir)
+            except Exception:
+                pass
+        os.makedirs(torrent_temp_dir, exist_ok=True)
+
         aria2c_bin = _find_aria2c()
         cmd = [
             aria2c_bin,
-            f"--dir={save_dir}",
+            f"--dir={torrent_temp_dir}",
             "--seed-time=0",
             "--bt-stop-timeout=90",
             "--allow-overwrite=true",
@@ -549,11 +560,11 @@ def save_video(video_url: str, save_dir: str = "") -> str:
         except Exception as e:
             logger.error(f"Failed to run aria2c: {str(e)}")
 
-        # Scan for largest video file
+        # Scan for largest video file ONLY inside torrent_temp_dir
         video_extensions = ('.mp4', '.mkv', '.avi', '.mov', '.flv', '.wmv', '.webm', '.mpeg')
         largest_file = None
         max_size = -1
-        for root, dirs, files in os.walk(save_dir):
+        for root, dirs, files in os.walk(torrent_temp_dir):
             for file in files:
                 if file.lower().endswith(video_extensions):
                     full_path = os.path.join(root, file)
@@ -565,51 +576,47 @@ def save_video(video_url: str, save_dir: str = "") -> str:
                     except Exception:
                         continue
 
+        success = False
+        dest_mp4_path = os.path.join(save_dir, f"vid-{url_hash}.mp4")
         if largest_file:
-            dest_mp4_path = os.path.join(save_dir, f"vid-{url_hash}.mp4")
-            parent_of_largest = os.path.dirname(largest_file)
-
             if largest_file.lower().endswith(".mkv"):
                 # Convert MKV to MP4 using ffmpeg
                 ffmpeg_cmd = ["ffmpeg", "-y", "-i", largest_file, "-c", "copy", dest_mp4_path]
                 logger.info(f"Converting MKV to MP4: {' '.join(ffmpeg_cmd)}")
                 try:
                     subprocess.run(ffmpeg_cmd, check=True, timeout=180)
-                    try:
-                        os.remove(largest_file)
-                    except Exception as e:
-                        logger.warning(f"Failed to remove original MKV file {largest_file}: {str(e)}")
+                    success = True
                 except Exception as e:
                     logger.error(f"Failed to convert MKV to MP4: {str(e)}")
-                    return ""
             else:
-                if os.path.abspath(largest_file) != os.path.abspath(dest_mp4_path):
-                    if os.path.exists(dest_mp4_path):
-                        try:
-                            os.remove(dest_mp4_path)
-                        except Exception:
-                            pass
+                if os.path.exists(dest_mp4_path):
                     try:
-                        os.rename(largest_file, dest_mp4_path)
-                    except Exception as e:
-                        logger.error(f"Failed to rename {largest_file} to {dest_mp4_path}: {str(e)}")
-                        try:
-                            shutil.copy2(largest_file, dest_mp4_path)
-                            os.remove(largest_file)
-                        except Exception as e2:
-                            logger.error(f"Fallback copy/delete failed: {str(e2)}")
-                            return ""
-
-            # Cleanup parent of largest file if it's a subdirectory
-            if os.path.abspath(parent_of_largest) != os.path.abspath(save_dir):
+                        os.remove(dest_mp4_path)
+                    except Exception:
+                        pass
                 try:
-                    shutil.rmtree(parent_of_largest)
-                except Exception as rmtree_err:
-                    logger.warning(f"Failed to remove torrent directory {parent_of_largest}: {str(rmtree_err)}")
+                    os.rename(largest_file, dest_mp4_path)
+                    success = True
+                except Exception as e:
+                    logger.error(f"Failed to rename {largest_file} to {dest_mp4_path}: {str(e)}")
+                    try:
+                        shutil.copy2(largest_file, dest_mp4_path)
+                        success = True
+                    except Exception as e2:
+                        logger.error(f"Fallback copy failed: {str(e2)}")
 
-            if os.path.exists(dest_mp4_path) and os.path.getsize(dest_mp4_path) > 0:
+            if success and os.path.exists(dest_mp4_path) and os.path.getsize(dest_mp4_path) > 0:
                 logger.info(f"AnimeTosho video saved: {dest_mp4_path}")
-        if not largest_file:
+            else:
+                success = False
+
+        # Cleanup temp directory
+        try:
+            shutil.rmtree(torrent_temp_dir)
+        except Exception as rmtree_err:
+            logger.warning(f"Failed to remove temp torrent directory {torrent_temp_dir}: {str(rmtree_err)}")
+
+        if not success:
             return ""
 
     if "tiktok.com" not in video_url and not video_url.startswith("magnet:"):
