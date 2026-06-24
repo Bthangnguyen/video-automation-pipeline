@@ -671,9 +671,10 @@ def download_videos(
             material_directory=material_directory,
         )
 
-    valid_video_items = []
     valid_video_urls = []
     found_duration = 0.0
+    hook_items = []
+    body_items = []
     for i, search_term in enumerate(search_terms):
         kwargs = {
             "search_term": search_term,
@@ -687,18 +688,24 @@ def download_videos(
 
         for item in video_items:
             if item.url not in valid_video_urls:
-                valid_video_items.append(item)
+                if source == "douyin" and i == 0:
+                    hook_items.append(item)
+                else:
+                    body_items.append(item)
                 valid_video_urls.append(item.url)
                 found_duration += item.duration
 
+    valid_video_items = hook_items + body_items
     logger.info(
-        f"found total videos: {len(valid_video_items)}, required duration: {audio_duration} seconds, found duration: {found_duration} seconds"
+        f"found total videos: {len(valid_video_items)} (hooks: {len(hook_items)}, bodies: {len(body_items)}), required duration: {audio_duration} seconds, found duration: {found_duration} seconds"
     )
     video_paths = []
 
     concat_mode_value = getattr(video_concat_mode, "value", video_concat_mode)
     if concat_mode_value == VideoConcatMode.random.value:
-        random.shuffle(valid_video_items)
+        random.shuffle(hook_items)
+        random.shuffle(body_items)
+        valid_video_items = hook_items + body_items
 
     total_duration = 0.0
     for item in valid_video_items:

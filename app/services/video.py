@@ -541,6 +541,7 @@ def combine_videos(
     video_transition_mode: VideoTransitionMode = None,
     max_clip_duration: int = 5,
     threads: int = 2,
+    keep_first_clip_at_start: bool = False,
 ) -> str:
     audio_clip = AudioFileClip(audio_file)
     try:
@@ -597,10 +598,20 @@ def combine_videos(
             if video_concat_mode.value == VideoConcatMode.sequential.value:
                 break
 
-    subclipped_items = _prioritize_unique_source_clips(
-        subclipped_items=subclipped_items,
-        concat_mode=video_concat_mode,
-    )
+    if keep_first_clip_at_start and subclipped_items:
+        first_video_path = video_paths[0]
+        hook_subclips = [item for item in subclipped_items if item.source_file_path == first_video_path]
+        body_subclips = [item for item in subclipped_items if item.source_file_path != first_video_path]
+        prioritized_body = _prioritize_unique_source_clips(
+            subclipped_items=body_subclips,
+            concat_mode=video_concat_mode,
+        )
+        subclipped_items = hook_subclips[:1] + prioritized_body
+    else:
+        subclipped_items = _prioritize_unique_source_clips(
+            subclipped_items=subclipped_items,
+            concat_mode=video_concat_mode,
+        )
         
     logger.debug(f"total subclipped items: {len(subclipped_items)}")
     

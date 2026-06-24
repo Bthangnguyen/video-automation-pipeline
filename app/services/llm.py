@@ -751,8 +751,22 @@ def generate_terms(
     video_script: str,
     amount: int = 5,
     match_script_order: bool = False,
+    video_source: str = "pexels",
 ) -> List[str]:
-    if match_script_order:
+    if video_source == "animetosho":
+        goal = (
+            f"Generate {amount} search terms for anime torrents, depending on the "
+            "subject and characters of the anime."
+        )
+        output_example = '["Hunter x Hunter 2011", "Gon Freecss", "Killua Zoldyck", "Hunter x Hunter"]'
+        constrains_content = """
+1. the search terms are to be returned as a json-array of strings.
+2. each search term must be a simplified anime title (e.g., 'Hunter x Hunter 2011', 'Naruto') or character names (e.g., 'Gon', 'Killua') that are likely to match torrent release names on a torrent index.
+3. you must only return the json-array of strings. you must not return anything else.
+4. do NOT add descriptive scene words (like 'scene', 'revenge', 'sad', 'fight', 'sacrifice') to the search terms, only use anime names and character names.
+5. reply with english search terms only.
+""".strip()
+    elif match_script_order:
         goal = (
             f"Generate {amount} chronological stock-video search terms that follow "
             "the order of topics in the video script."
@@ -762,7 +776,7 @@ def generate_terms(
             "earlier terms must describe earlier visual moments."
         )
         # 有序关键词模式下，示例数量要和 amount 保持一致，避免模型被固定
-        # 的 4 个示例误导，导致长文案只返回少量关键词，影响素材覆盖度。
+        # 的 4 个示例误导，导致 long-form script only returns small number of terms.
         example_terms = [
             "opening visual topic",
             *[
@@ -772,16 +786,30 @@ def generate_terms(
             "final visual topic",
         ]
         output_example = json.dumps(example_terms[:amount], ensure_ascii=False)
+        constrains_content = f"""
+1. the search terms are to be returned as a json-array of strings.
+2. each search term should consist of 1-3 words, always add the main subject of the video.
+3. you must only return the json-array of strings. you must not return anything else. you must not return the script.
+4. the search terms must be related to the subject of the video.
+5. reply with english search terms only.
+{ordering_rule}
+""".strip()
     else:
         goal = (
             f"Generate {amount} search terms for stock videos, depending on the "
             "subject of a video."
         )
-        ordering_rule = ""
         output_example = (
             '["search term 1", "search term 2", "search term 3",'
             '"search term 4", "search term 5"]'
         )
+        constrains_content = """
+1. the search terms are to be returned as a json-array of strings.
+2. each search term should consist of 1-3 words, always add the main subject of the video.
+3. you must only return the json-array of strings. you must not return anything else. you must not return the script.
+4. the search terms must be related to the subject of the video.
+5. reply with english search terms only.
+""".strip()
 
     prompt = f"""
 # Role: Video Search Terms Generator
@@ -790,12 +818,7 @@ def generate_terms(
 {goal}
 
 ## Constrains:
-1. the search terms are to be returned as a json-array of strings.
-2. each search term should consist of 1-3 words, always add the main subject of the video.
-3. you must only return the json-array of strings. you must not return anything else. you must not return the script.
-4. the search terms must be related to the subject of the video.
-5. reply with english search terms only.
-{ordering_rule}
+{constrains_content}
 
 ## Output Example:
 {output_example}

@@ -47,6 +47,7 @@ def generate_terms(task_id, params, video_script):
             video_script=video_script,
             amount=8 if params.match_materials_to_script else 5,
             match_script_order=params.match_materials_to_script,
+            video_source=params.video_source,
         )
     else:
         if isinstance(video_terms, str):
@@ -286,6 +287,7 @@ def generate_final_videos(
             video_transition_mode=video_transition_mode,
             max_clip_duration=params.video_clip_duration,
             threads=params.n_threads,
+            keep_first_clip_at_start=(params.video_source == "douyin"),
         )
 
         _progress += 50 / params.video_count / 2
