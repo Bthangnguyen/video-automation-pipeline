@@ -464,16 +464,7 @@ class TestTikTokAndAnimeToshoProviders(unittest.TestCase):
         self.assertEqual(results[1].url, "https://www.tiktok.com/@zachking/video/222")
         self.assertEqual(results[1].duration, 60)
 
-    @patch("app.services.material.requests.get")
-    def test_search_animetosho(self, mock_get):
-        mock_get.return_value = SimpleNamespace(
-            text='<html><body><a href="magnet:?xt=urn:btih:xyz&amp;dn=test">magnet link</a></body></html>'
-        )
-        results = material.search_videos_animetosho("naruto", minimum_duration=5)
-        self.assertEqual(len(results), 1)
-        self.assertEqual(results[0].provider, "animetosho")
-        self.assertEqual(results[0].url, "magnet:?xt=urn:btih:xyz&dn=test")
-        self.assertEqual(results[0].duration, 1200)
+
 
     @patch("app.services.material.subprocess.run")
     @patch("app.services.material.os.path.exists")
@@ -496,32 +487,7 @@ class TestTikTokAndAnimeToshoProviders(unittest.TestCase):
             res = material.save_video("https://www.tiktok.com/@user/video/123", save_dir="test_dir")
             self.assertTrue(res.endswith(".mp4"))
 
-    @patch("app.services.material.subprocess.run")
-    @patch("app.services.material.os.walk")
-    @patch("app.services.material.os.path.exists")
-    @patch("app.services.material.os.path.getsize")
-    @patch("app.services.material.VideoFileClip")
-    def test_save_video_animetosho_mkv(self, mock_videoclip, mock_getsize, mock_exists, mock_walk, mock_run):
-        mock_videoclip.return_value = SimpleNamespace(duration=10, fps=30, close=lambda: None)
-        mock_getsize.return_value = 1024
-        mock_walk.return_value = [
-            ("test_dir/subdir", [], ["downloaded.mkv"])
-        ]
-        calls = []
-        def side_effect_exists(path):
-            calls.append(path)
-            if len(calls) == 1:
-                return True
-            if len(calls) == 2:
-                return False
-            return True
-        mock_exists.side_effect = side_effect_exists
-        
-        with patch("app.services.material.os.remove") as mock_remove, patch("app.services.material.shutil.rmtree") as mock_rmtree:
-            res = material.save_video("magnet:?xt=urn:btih:xyz", save_dir="test_dir")
-            self.assertTrue(res.endswith(".mp4"))
-            mock_remove.assert_called_with(os.path.join("test_dir/subdir", "downloaded.mkv"))
-            mock_rmtree.assert_called()
+
 
     @patch("app.services.material.subprocess.run")
     def test_search_tiktok_themes_hook_and_body(self, mock_run):

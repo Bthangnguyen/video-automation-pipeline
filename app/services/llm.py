@@ -753,21 +753,7 @@ def generate_terms(
     match_script_order: bool = False,
     video_source: str = "pexels",
 ) -> List[str]:
-    if video_source == "animetosho":
-        goal = (
-            f"Generate {amount} search terms for specific anime episodes on AnimeTosho, "
-            "based on the video subject and script."
-        )
-        output_example = '["Hunter x Hunter 2011 131", "Hunter x Hunter 2011 116", "Hunter x Hunter 2011 130"]'
-        constrains_content = """
-1. The search terms must be returned as a JSON-array of strings.
-2. Each search term MUST contain the simplified anime name followed by a specific episode number (e.g., 'Hunter x Hunter 2011 131', 'Naruto Shippuden 375') that corresponds to the key events or scenes mentioned in the script.
-3. Use your knowledge to identify the exact episode number(s) for the anime events mentioned in the script.
-4. Do NOT use generic anime names alone, and do NOT use character names alone (they return 0 results or massive season batches). Always combine the anime title with a specific episode number.
-5. Do NOT add descriptive words (like 'scene', 'fight', 'transformation', 'sad') to the search terms.
-6. Reply with English search terms only.
-""".strip()
-    elif match_script_order:
+    if match_script_order:
         goal = (
             f"Generate {amount} chronological stock-video search terms that follow "
             "the order of topics in the video script."

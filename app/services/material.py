@@ -227,78 +227,7 @@ def search_videos_youtube(
     return video_items
 
 
-def search_videos_animetosho(
-    search_term: str,
-    minimum_duration: int,
-    video_aspect: VideoAspect = VideoAspect.portrait,
-) -> List[MaterialInfo]:
-    params = {"q": search_term}
-    query_url = f"https://animetosho.org/search?{urlencode(params)}"
-    logger.info(f"searching AnimeTosho videos: {query_url}, with proxies: {config.proxy}")
-    try:
-        r = requests.get(
-            query_url,
-            proxies=config.proxy,
-            verify=_get_tls_verify(),
-            timeout=(30, 60),
-        )
-        html_content = r.text
-        
-        # Try to use BeautifulSoup for robust parsing of entries
-        try:
-            from bs4 import BeautifulSoup
-            soup = BeautifulSoup(html_content, 'html.parser')
-            entries = soup.find_all('div', class_=lambda c: c and 'home_list_entry' in c)
-            video_items = []
-            seen_urls = set()
-            for entry in entries:
-                # Find direct torrent link first
-                torrent_a = entry.find('a', href=lambda h: h and 'torrent' in h and not h.startswith('magnet:'))
-                download_url = None
-                if torrent_a:
-                    download_url = torrent_a['href']
-                    if download_url.startswith('/'):
-                        download_url = "https://animetosho.org" + download_url
-                else:
-                    # Fallback to magnet link
-                    magnet_a = entry.find('a', href=lambda h: h and h.startswith('magnet:'))
-                    if magnet_a:
-                        download_url = html.unescape(magnet_a['href'])
-                
-                if download_url and download_url not in seen_urls:
-                    seen_urls.add(download_url)
-                    item = MaterialInfo()
-                    item.provider = "animetosho"
-                    item.url = download_url
-                    item.duration = 1200
-                    video_items.append(item)
-            if video_items:
-                return video_items
-        except Exception as parse_err:
-            logger.warning(f"Failed parsing AnimeTosho with BeautifulSoup, falling back to regex: {str(parse_err)}")
-
-        # Regex fallback
-        magnet_links = re.findall(r'href="(magnet:\?[^"]+)"', html_content)
-        if not magnet_links:
-            magnet_links = re.findall(r'magnet:\?[^"\'\s>]+', html_content)
-        
-        video_items = []
-        seen_magnets = set()
-        for magnet in magnet_links:
-            unescaped_magnet = html.unescape(magnet)
-            if unescaped_magnet in seen_magnets:
-                continue
-            seen_magnets.add(unescaped_magnet)
-            
-            item = MaterialInfo()
-            item.provider = "animetosho"
-            item.url = unescaped_magnet
-            item.duration = 1200
-            video_items.append(item)
-        return video_items
-    except Exception as e:
-        logger.error(f"search AnimeTosho videos failed: {str(e)}")
-    return []
+# AnimeTosho search removed
 
 
 def search_videos_pexels(
@@ -584,91 +513,7 @@ def save_video(video_url: str, save_dir: str = "") -> str:
         if not success:
             return ""
 
-    # AnimeTosho download logic
-    if video_url.startswith("magnet:") or ".torrent" in video_url:
-        torrent_temp_dir = os.path.join(save_dir, f"{video_id}_temp")
-        if os.path.exists(torrent_temp_dir):
-            try:
-                shutil.rmtree(torrent_temp_dir)
-            except Exception:
-                pass
-        os.makedirs(torrent_temp_dir, exist_ok=True)
 
-        aria2c_bin = _find_aria2c()
-        cmd = [
-            aria2c_bin,
-            f"--dir={torrent_temp_dir}",
-            "--seed-time=0",
-            "--bt-stop-timeout=90",
-            "--allow-overwrite=true",
-            video_url
-        ]
-        logger.info(f"Running aria2c to download magnet link: {' '.join(cmd)}")
-        try:
-            subprocess.run(cmd, check=True, timeout=120)
-        except subprocess.TimeoutExpired:
-            logger.warning("aria2c download timed out (120s), scanning for completed files.")
-        except Exception as e:
-            logger.error(f"Failed to run aria2c: {str(e)}")
-
-        # Scan for largest video file ONLY inside torrent_temp_dir
-        video_extensions = ('.mp4', '.mkv', '.avi', '.mov', '.flv', '.wmv', '.webm', '.mpeg')
-        largest_file = None
-        max_size = -1
-        for root, dirs, files in os.walk(torrent_temp_dir):
-            for file in files:
-                if file.lower().endswith(video_extensions):
-                    full_path = os.path.join(root, file)
-                    try:
-                        size = os.path.getsize(full_path)
-                        if size > max_size:
-                            max_size = size
-                            largest_file = full_path
-                    except Exception:
-                        continue
-
-        success = False
-        dest_mp4_path = os.path.join(save_dir, f"vid-{url_hash}.mp4")
-        if largest_file:
-            if largest_file.lower().endswith(".mkv"):
-                # Convert MKV to MP4 using ffmpeg
-                ffmpeg_cmd = ["ffmpeg", "-y", "-i", largest_file, "-c", "copy", dest_mp4_path]
-                logger.info(f"Converting MKV to MP4: {' '.join(ffmpeg_cmd)}")
-                try:
-                    subprocess.run(ffmpeg_cmd, check=True, timeout=180)
-                    success = True
-                except Exception as e:
-                    logger.error(f"Failed to convert MKV to MP4: {str(e)}")
-            else:
-                if os.path.exists(dest_mp4_path):
-                    try:
-                        os.remove(dest_mp4_path)
-                    except Exception:
-                        pass
-                try:
-                    os.rename(largest_file, dest_mp4_path)
-                    success = True
-                except Exception as e:
-                    logger.error(f"Failed to rename {largest_file} to {dest_mp4_path}: {str(e)}")
-                    try:
-                        shutil.copy2(largest_file, dest_mp4_path)
-                        success = True
-                    except Exception as e2:
-                        logger.error(f"Fallback copy failed: {str(e2)}")
-
-            if success and os.path.exists(dest_mp4_path) and os.path.getsize(dest_mp4_path) > 0:
-                logger.info(f"AnimeTosho video saved: {dest_mp4_path}")
-            else:
-                success = False
-
-        # Cleanup temp directory
-        try:
-            shutil.rmtree(torrent_temp_dir)
-        except Exception as rmtree_err:
-            logger.warning(f"Failed to remove temp torrent directory {torrent_temp_dir}: {str(rmtree_err)}")
-
-        if not success:
-            return ""
 
     # YouTube download logic
     if video_url.startswith("ytsearch:") or "youtube.com" in video_url or "youtu.be" in video_url:
@@ -715,7 +560,7 @@ def save_video(video_url: str, save_dir: str = "") -> str:
             logger.error(f"Failed to download YouTube video: {str(e)}")
             return ""
 
-    if "tiktok.com" not in video_url and not video_url.startswith("magnet:") and ".torrent" not in video_url and not video_url.startswith("ytsearch:") and "youtube.com" not in video_url and "youtu.be" not in video_url:
+    if "tiktok.com" not in video_url and not video_url.startswith("ytsearch:") and "youtube.com" not in video_url and "youtu.be" not in video_url:
         headers = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36"
         }
@@ -754,8 +599,7 @@ def download_videos(
         search_videos = search_videos_coverr
     elif source == "douyin":
         search_videos = search_videos_tiktok
-    elif source == "animetosho":
-        search_videos = search_videos_animetosho
+
     elif source == "youtube":
         search_videos = search_videos_youtube
 
@@ -808,9 +652,8 @@ def download_videos(
 
     concat_mode_value = getattr(video_concat_mode, "value", video_concat_mode)
     if concat_mode_value == VideoConcatMode.random.value:
-        if source != "animetosho":
-            random.shuffle(hook_items)
-            random.shuffle(body_items)
+        random.shuffle(hook_items)
+        random.shuffle(body_items)
         valid_video_items = hook_items + body_items
 
     total_duration = 0.0

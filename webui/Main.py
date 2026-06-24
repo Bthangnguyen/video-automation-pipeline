@@ -816,7 +816,6 @@ with middle_panel:
             (tr("TikTok"), "douyin"),
             (tr("Bilibili"), "bilibili"),
             (tr("Xiaohongshu"), "xiaohongshu"),
-            (tr("AnimeTosho"), "animetosho"),
             (tr("YouTube"), "youtube"),
         ]
 
@@ -1469,7 +1468,7 @@ if start_button:
         scroll_to_bottom()
         st.stop()
 
-    if params.video_source not in ["pexels", "pixabay", "coverr", "local", "douyin", "animetosho", "youtube"]:
+    if params.video_source not in ["pexels", "pixabay", "coverr", "local", "douyin", "youtube"]:
         st.error(tr("Please Select a Valid Video Source"))
         scroll_to_bottom()
         st.stop()
